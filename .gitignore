@@ -1,37 +1,12 @@
-.idea/**/workspace.xml
-.idea/**/tasks.xml
-.idea/**/usage.statistics.xml
-.idea/**/dictionaries
-.idea/**/shelf
-.idea/**/aws.xml
-.idea/**/contentModel.xml
-.idea/**/dataSources/
-.idea/**/dataSources.ids
-.idea/**/dataSources.local.xml
-.idea/**/sqlDataSources.xml
-.idea/**/dynamic.xml
-.idea/**/uiDesigner.xml
-.idea/**/dbnavigator.xml
-.idea/**/gradle.xml
-.idea/**/libraries
-cmake-build-*/
-.idea/**/mongoSettings.xml
-*.iws
-out/
-.idea_modules/
-atlassian-ide-plugin.xml
-.idea/replstate.xml
-.idea/sonarlint/
-com_crashlytics_export_strings.xml
-crashlytics.properties
-crashlytics-build.properties
-fabric.properties
-.idea/httpRequests
-.idea/caches/build_file_checksums.ser
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -45,15 +20,22 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+
+# PyInstaller
 *.manifest
 *.spec
+
+# Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+
+# Unit test / coverage reports
 htmlcov/
 .tox/
 .nox/
@@ -66,41 +48,129 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
-cover/
+
+# Translations
 *.mo
 *.pot
+
+# Django stuff
 *.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+
+# Flask stuff
 instance/
 .webassets-cache
+
+# Scrapy stuff
 .scrapy
+
+# Sphinx documentation
 docs/_build/
-.pybuilder/
+
+# PyBuilder
 target/
+
+# Jupyter Notebook
 .ipynb_checkpoints
+
+# IPython
 profile_default/
 ipython_config.py
-.pdm.toml
+
+# pyenv
+.python-version
+
+# pipenv
+#Pipfile.lock
+
+# PEP 582
 __pypackages__/
+
+# Celery stuff
 celerybeat-schedule
 celerybeat.pid
+
+# SageMath parsed files
 *.sage.py
+
+# Environments
 .env
+.env.local
+.env.production
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Spyder project settings
 .spyderproject
 .spyproject
+
+# Rope project settings
 .ropeproject
+
+# mkdocs documentation
 /site
+
+# mypy
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Pyre type checker
 .pyre/
+
+# pytype static type analyzer
 .pytype/
+
+# Cython debug symbols
 cython_debug/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Telegram session files
+sessions/
+*.session
+*.session-journal
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+telegram_mirror.db
+
+# Rendered message images
+rendered_messages/
+*.png
+*.jpg
+*.jpeg
+
+# Configuration files with sensitive data
+credentials.json
+
+# Logs
+logs/
+
+# Project specific
+files/
+bot/*.session*
+chats_list.txt
+.pw-temp-profile/

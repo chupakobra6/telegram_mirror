@@ -1,0 +1,2 @@
+# This file ensures the alembic/versions directory is tracked by git
+# even when it's empty. Migration files will be generated here. 

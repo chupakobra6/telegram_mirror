@@ -4,8 +4,10 @@ import asyncio
 import logging
 import os
 import tempfile
+import re
 from pathlib import Path
 from typing import Optional, Callable, Awaitable
+from urllib.parse import urlparse
 
 from pyrogram import Client
 from pyrogram.types import Message as PyrogramMessage
@@ -24,6 +26,55 @@ class AdminCommandHandler:
     def __init__(self):
         self.settings = get_settings()
         self.db_manager = get_db_manager()
+    
+    def _parse_tg_link(self, token: str) -> tuple[Optional[int], Optional[int], Optional[int]]:
+        """Parse t.me/c links and return (chat_id, topic_id, message_id).
+        Supports:
+        - https://t.me/c/<short_id>/<message_id>
+        - https://t.me/c/<short_id>/<topic_id>/<message_id>
+        Returns (None, None, None) if not a supported link.
+        """
+        s = token.strip()
+        if not s:
+            return None, None, None
+        if s.startswith("@"):
+            s = s[1:]
+        if s.startswith("http"):
+            uri = s
+        elif s.startswith("t.me/") or s.startswith("telegram.me/"):
+            uri = "https://" + s
+        else:
+            return None, None, None
+        try:
+            u = urlparse(uri)
+            if not (u.netloc.endswith("t.me") or u.netloc.endswith("telegram.me")):
+                return None, None, None
+            parts = [p for p in u.path.split("/") if p]
+            if not parts:
+                return None, None, None
+            if parts[0] == "c":
+                if len(parts) == 3:
+                    # /c/<short>/<msg>
+                    short_id_str = parts[1]
+                    message_id_str = parts[2]
+                    chat_id = int(f"-100{int(short_id_str)}")
+                    topic_id = None
+                    message_id = int(message_id_str)
+                    return chat_id, topic_id, message_id
+                if len(parts) >= 4:
+                    # /c/<short>/<topic>/<msg>
+                    short_id_str = parts[1]
+                    topic_id_str = parts[2]
+                    message_id_str = parts[3]
+                    chat_id = int(f"-100{int(short_id_str)}")
+                    topic_id = int(topic_id_str)
+                    message_id = int(message_id_str)
+                    return chat_id, topic_id, message_id
+                return None, None, None
+            # Username links not supported here
+            return None, None, None
+        except Exception:
+            return None, None, None
     
     async def handle_help_command(self, client: Client, message: PyrogramMessage) -> None:
         """Send help message with available commands."""
@@ -441,47 +492,110 @@ Last updated: {asyncio.get_event_loop().time()}
     ) -> None:
         """Download media from a message and re-upload it to a target chat.
 
-        Usage: /copy_message <source_chat_id> <message_id> [message_id ...] <target_chat_id>
+        Usage:
+        • /copy_message <source_chat_id> <message_id> [message_id ...] [<target_chat_id>]
+        • /copy_message <t.me/c/...> [<t.me/c/...> ...] [<target_chat_id>]
+        If <target_chat_id> is omitted, messages are sent to Saved Messages ("me").
         """
         try:
             parts = message.command or []
-            if len(parts) < 4:
+            if len(parts) < 2:
                 await client.send_message(
                     chat_id=message.chat.id,
                     text=(
                         "❌ Неверный формат команды\n\n"
-                        "Использование: `/copy_message <source_chat_id> <message_id> [message_id ...] <target_chat_id>`\n\n"
-                        "Пример: `/copy_message -1002651305316 40 94 248 1266978055`"
+                        "Использование:\n"
+                        "• `/copy_message <source_chat_id> <message_id> [message_id ...] <target_chat_id>`\n"
+                        "• `/copy_message <t.me/c/...> [<t.me/c/...> ...] <target_chat_id>`"
                     ),
                     reply_to_message_id=message.id,
                 )
                 return
 
-            source_chat_id = int(parts[1])
-            target_chat_id = int(parts[-1])
-            raw_ids = parts[2:-1]
-            if not raw_ids:
-                await client.send_message(
-                    chat_id=message.chat.id,
-                    text="❌ Укажите хотя бы один ID сообщения между исходным и целевым чатами.",
-                    reply_to_message_id=message.id,
-                )
-                return
+            # Determine target chat: last token may be target id; default to Saved Messages ("me")
+            target_chat_token = parts[-1]
+            target_chat_id: int | str
+            tokens_between: list[str]
+            try:
+                # try integer target
+                target_chat_id = int(target_chat_token)
+                tokens_between = parts[1:-1]
+            except Exception:
+                low = target_chat_token.lower()
+                if low in ("me", "self"):
+                    target_chat_id = "me"
+                    tokens_between = parts[1:-1]
+                else:
+                    # no explicit target -> default to Saved Messages
+                    target_chat_id = "me"
+                    tokens_between = parts[1:]
 
+            link_mode = any(("t.me/" in t) or ("telegram.me/" in t) for t in tokens_between)
             message_ids: list[int] = []
             bad_tokens: list[str] = []
-            for tok in raw_ids:
-                try:
-                    message_ids.append(int(tok))
-                except Exception:
-                    bad_tokens.append(tok)
+            source_chat_id: Optional[int] = None
+
+            if link_mode:
+                link_chat_ids: set[int] = set()
+                for tok in tokens_between:
+                    cid, _tid, mid = self._parse_tg_link(tok)
+                    if cid is not None and mid is not None:
+                        link_chat_ids.add(cid)
+                        message_ids.append(mid)
+                    else:
+                        try:
+                            message_ids.append(int(tok))
+                        except Exception:
+                            bad_tokens.append(tok)
+                if len(link_chat_ids) == 1:
+                    source_chat_id = next(iter(link_chat_ids))
+                elif len(link_chat_ids) == 0:
+                    await client.send_message(
+                        chat_id=message.chat.id,
+                        text="❌ Не удалось определить источник из ссылок. Укажите корректные ссылки t.me/c/…",
+                        reply_to_message_id=message.id,
+                    )
+                    return
+                else:
+                    await client.send_message(
+                        chat_id=message.chat.id,
+                        text=f"❌ Ссылки указывают на разные чаты: {', '.join(map(str, link_chat_ids))}. Используйте один источник за запуск.",
+                        reply_to_message_id=message.id,
+                    )
+                    return
+            else:
+                if len(tokens_between) < 2:
+                    await client.send_message(
+                        chat_id=message.chat.id,
+                        text=(
+                            "❌ Неверный формат команды\n\n"
+                            "Использование: `/copy_message <source_chat_id> <message_id> [message_id ...] <target_chat_id>`"
+                        ),
+                        reply_to_message_id=message.id,
+                    )
+                    return
+                source_chat_id = int(tokens_between[0])
+                raw_ids = tokens_between[1:]
+                for tok in raw_ids:
+                    try:
+                        message_ids.append(int(tok))
+                    except Exception:
+                        bad_tokens.append(tok)
 
             if bad_tokens:
                 await client.send_message(
                     chat_id=message.chat.id,
-                    text=f"⚠️ Пропущены некорректные ID: {' '.join(bad_tokens)}",
+                    text=f"⚠️ Пропущены некорректные ID/ссылки: {' '.join(bad_tokens)}",
                     reply_to_message_id=message.id,
                 )
+
+            if not message_ids or source_chat_id is None:
+                await client.send_message(
+                    chat_id=message.chat.id,
+                    text="❌ Не найдено ни одного корректного ID сообщения.",
+                    reply_to_message_id=message.id,
+                )
+                return
 
             # Create single status message to edit throughout the process
             status = await client.send_message(
@@ -490,16 +604,26 @@ Last updated: {asyncio.get_event_loop().time()}
                 reply_to_message_id=message.id,
             )
 
+            last_edit_time = 0.0
+            last_edit_text = ""
+            throttle_seconds = 3.0
+
             async def status_update(text: str) -> None:
-                try:
-                    await client.edit_message_text(
-                        chat_id=status.chat.id,
-                        message_id=status.id,
-                        text=text,
-                    )
-                except Exception:
-                    # Message might be deleted or same content; ignore and continue
-                    pass
+                nonlocal last_edit_time, last_edit_text
+                now = asyncio.get_event_loop().time()
+                important = text.startswith("✅") or text.startswith("❌") or text.startswith("📊")
+                if important or (now - last_edit_time) >= throttle_seconds or text != last_edit_text:
+                    try:
+                        await client.edit_message_text(
+                            chat_id=status.chat.id,
+                            message_id=status.id,
+                            text=text,
+                        )
+                        last_edit_time = now
+                        last_edit_text = text
+                    except Exception:
+                        # Message might be deleted or same content; ignore and continue
+                        pass
 
             total = len(message_ids)
             ok = 0
@@ -546,7 +670,7 @@ Last updated: {asyncio.get_event_loop().time()}
         client: Client,
         source_chat_id: int,
         source_message_id: int,
-        target_chat_id: int,
+        target_chat_id: int | str,
         status_update: Callable[[str], Awaitable[None]],
     ) -> bool:
         """Process a single message copy (download + re-upload). Returns True if sent."""
@@ -557,15 +681,16 @@ Last updated: {asyncio.get_event_loop().time()}
 
             await status_update("⏳ Обрабатываю: проверяю доступ и получаю сообщение...")
 
-            # Verify access to target chat early
-            try:
-                _ = await client.get_chat(target_chat_id)
-            except Exception:
-                await status_update(
-                    f"❌ Не удается получить доступ к целевому чату `{target_chat_id}`\n"
-                    f"Убедитесь, что юзербот является участником этого чата."
-                )
-                return False
+            # Verify access to target chat early (skip for Saved Messages)
+            if target_chat_id != "me":
+                try:
+                    _ = await client.get_chat(target_chat_id)
+                except Exception:
+                    await status_update(
+                        f"❌ Не удается получить доступ к целевому чату `{target_chat_id}`\n"
+                        f"Убедитесь, что юзербот является участником этого чата."
+                    )
+                    return False
 
             # Fetch source message
             try:
@@ -585,6 +710,8 @@ Last updated: {asyncio.get_event_loop().time()}
                 media_type = "photo"
             elif src_msg.video:
                 media_type = "video"
+            elif getattr(src_msg, "video_note", None):
+                media_type = "video_note"
             elif src_msg.document:
                 media_type = "document"
             elif src_msg.audio:
@@ -632,7 +759,16 @@ Last updated: {asyncio.get_event_loop().time()}
 
                 # Pre-compute desired filename (may be refined below after metadata)
                 desired_filename: str | None = None
-                media_type = "video" if src_msg.video else "photo" if src_msg.photo else "document" if src_msg.document else "audio" if src_msg.audio else "voice" if src_msg.voice else "animation" if src_msg.animation else ""
+                media_type = (
+                    "video" if src_msg.video else
+                    "video_note" if getattr(src_msg, "video_note", None) else
+                    "photo" if src_msg.photo else
+                    "document" if src_msg.document else
+                    "audio" if src_msg.audio else
+                    "voice" if src_msg.voice else
+                    "animation" if src_msg.animation else
+                    ""
+                )
                 if media_type == "document" and src_msg.document and src_msg.document.file_name:
                     desired_filename = src_msg.document.file_name
                 elif media_type == "audio" and src_msg.audio:
@@ -645,6 +781,8 @@ Last updated: {asyncio.get_event_loop().time()}
                         desired_filename = base or f"audio_{source_message_id}"
                 elif media_type == "video" and src_msg.video:
                     desired_filename = src_msg.video.file_name if src_msg.video.file_name else f"video_{source_message_id}"
+                elif media_type == "video_note" and getattr(src_msg, "video_note", None):
+                    desired_filename = f"video_note_{source_message_id}.mp4"
                 elif media_type == "voice":
                     desired_filename = f"voice_{source_message_id}"
                 elif media_type == "animation" and src_msg.animation:
@@ -681,6 +819,11 @@ Last updated: {asyncio.get_event_loop().time()}
                     if media_type == "video" and src_msg.video:
                         if src_msg.video.thumbs:
                             t = src_msg.video.thumbs[-1]
+                            thumb_path = await client.download_media(t, file_name=os.path.join(temp_dir, "thumb.jpg"))
+                    elif media_type == "video_note" and getattr(src_msg, "video_note", None):
+                        vn = src_msg.video_note
+                        if vn and getattr(vn, "thumbs", None):
+                            t = vn.thumbs[-1]
                             thumb_path = await client.download_media(t, file_name=os.path.join(temp_dir, "thumb.jpg"))
                     elif media_type == "audio" and src_msg.audio and src_msg.audio.thumbs:
                         t = src_msg.audio.thumbs[-1]
@@ -738,6 +881,19 @@ Last updated: {asyncio.get_event_loop().time()}
                                 video=download_path,
                                 caption=caption_text,
                                 caption_entities=caption_entities,
+                                **kwargs,
+                            )
+                        case "video_note":
+                            duration = src_msg.video_note.duration if getattr(src_msg, "video_note", None) and src_msg.video_note.duration else None
+                            length = src_msg.video_note.length if getattr(src_msg, "video_note", None) and src_msg.video_note.length else None
+                            kwargs = {}
+                            if duration is not None:
+                                kwargs["duration"] = duration
+                            if length is not None:
+                                kwargs["length"] = length
+                            await client.send_video_note(
+                                chat_id=target_chat_id,
+                                video_note=download_path,
                                 **kwargs,
                             )
                         case "document":
@@ -824,6 +980,15 @@ Last updated: {asyncio.get_event_loop().time()}
                             if duration is not None:
                                 kwargs["duration"] = duration
                             await client.send_voice(chat_id=target_chat_id, voice=download_path, **kwargs)
+                        elif media_type == "video_note":
+                            duration = src_msg.video_note.duration if getattr(src_msg, "video_note", None) and src_msg.video_note.duration else None
+                            length = src_msg.video_note.length if getattr(src_msg, "video_note", None) and src_msg.video_note.length else None
+                            kwargs = {}
+                            if duration is not None:
+                                kwargs["duration"] = duration
+                            if length is not None:
+                                kwargs["length"] = length
+                            await client.send_video_note(chat_id=target_chat_id, video_note=download_path, **kwargs)
                         else:
                             await client.send_document(chat_id=target_chat_id, document=download_path, caption=caption_text, caption_entities=caption_entities)
                     except Exception:
